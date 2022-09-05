@@ -16,6 +16,7 @@ libraryDependencies ++= Seq(
   "com.disneystreaming" %% "weaver-cats" % "0.7.15" % Test,
   "com.disneystreaming" %% "weaver-specs2" % "0.7.15" % Test,
   "com.disneystreaming" %% "weaver-scalacheck" % "0.7.15" % Test,
+  "org.typelevel" %% "cats-mtl" % "1.3.0" % Test
 )
 
 testFrameworks += new TestFramework("weaver.framework.CatsEffect")
@@ -23,5 +24,6 @@ testFrameworks += new TestFramework("weaver.framework.CatsEffect")
 // scalac options come from the sbt-tpolecat plugin so need to set any here
 
 addCompilerPlugin("org.typelevel" %% "kind-projector" % "0.13.2" cross CrossVersion.full)
+addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
 
 scalacOptions += "-Ymacro-annotations"

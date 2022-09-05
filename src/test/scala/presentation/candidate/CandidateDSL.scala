@@ -1,50 +1,40 @@
 package presentation.candidate
 
-import cats.MonadThrow
-import cats.effect.kernel.Ref
 import cats.implicits._
+import cats.{Applicative, Monad}
+import com.fortysevendeg.scalacheck.datetime.joda.ArbitraryJoda._
+import derevo.scalacheck.arbitrary.instance
 import org.joda.time.DateTime
-import presentation.candidate.event.CandidateEvent.CandidateCreatedEvent
-import presentation.candidate.readModel.{Candidate, CandidateState}
+import presentation.candidate.event.CandidateEvent.{AppliedToPositionEvent, NextStep}
 import presentation.event.EventMetadata
-import java.util.UUID
-
-trait CandidateQueryDSL[F[_]] {
-  def getCandidate(candidateId: CandidateId): F[Option[Candidate]]
-  def getCandidates: F[Map[CandidateId, Candidate]]
-}
+import presentation.position.PositionId
+import Common._
+import presentation.candidate.TestEnv.EventEnv
 
 trait CandidateDSL[F[_]] {
-  def createCandidate(firstName: FirstName, lastName: LastName, email: Email, at: DateTime): F[CandidateId]
+  val random: Generator[F]
+
+  def id: F[CandidateId]
+  def applyToPosition(hiringProcessId: F[HiringProcessId] = random[HiringProcessId],
+                      positionId: F[PositionId] = random[PositionId],
+                      startingStep: F[NextStep] = random[NextStep],
+                      at: F[DateTime] = random[DateTime]): F[HiringProcessDSL[F]]
 }
 
 object CandidateDSL {
-  sealed trait TestError extends Throwable
+  def make[F[_]: Monad](candidateId: CandidateId, env: EventEnv[F]): CandidateDSL[F] = new CandidateDSLLive[F](candidateId, env)
 
-  case object InvalidState extends TestError
+  class CandidateDSLLive[F[_]: Monad](candidateId: CandidateId, env: EventEnv[F]) extends CandidateDSL[F] {
+    override val random: Generator[F] = env.generator
 
-  case class TestState(candidates: Map[CandidateId, Candidate])
+    override val id: F[CandidateId] = Applicative[F].pure(candidateId)
 
-  object TestState {
-    val empty: TestState = TestState(Map.empty)
-  }
-
-  def impl[F[_]: MonadThrow: Ref.Make](random: Generator[F]): F[CandidateDSL[F] with CandidateQueryDSL[F]] = for {
-    state <- Ref.of[F, TestState](TestState.empty)
-  } yield new CandidateDSL[F] with CandidateQueryDSL[F] {
-    override def createCandidate(firstName: FirstName, lastName: LastName, email: Email, at: DateTime): F[CandidateId] = {
-      for {
-        id <- random[UUID].map(CandidateId.apply)
-        candidate <- MonadThrow[F].fromOption(
-          CandidateState(None, List((CandidateCreatedEvent(firstName, lastName, email), EventMetadata.SystemEventMetadata(at)))),
-          InvalidState
-        )
-        _ <- state.update(state => state.copy(candidates = state.candidates + (id -> candidate)))
-      } yield id
-    }
-
-    override def getCandidate(candidateId: CandidateId): F[Option[Candidate]] = state.get.map(_.candidates.get(candidateId))
-
-    override def getCandidates: F[Map[CandidateId, Candidate]] = state.get.map(_.candidates)
+    override def applyToPosition(hiringProcessId: F[HiringProcessId],
+                                 positionId: F[PositionId],
+                                 startingStep: F[NextStep],
+                                 at: F[DateTime]): F[HiringProcessDSL[F]] = for {
+      (hpId, pId, step, atF) <- Applicative[F].tuple4(hiringProcessId, positionId, startingStep, at)
+      _ <- env.candidateStore.update(candidateId, AppliedToPositionEvent(hpId, pId, step), EventMetadata(atF))
+    } yield HiringProcessDSL.make[F](candidateId, hpId, env)
   }
 }

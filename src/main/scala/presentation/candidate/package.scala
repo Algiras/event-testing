@@ -9,7 +9,6 @@ import eu.timepit.refined.predicates.all.MatchesRegex
 import eu.timepit.refined.types.all.NonEmptyString
 import io.estatico.newtype.macros.newtype
 import eu.timepit.refined.cats.refTypeShow
-
 import java.util.UUID
 
 package object candidate {
@@ -29,8 +28,10 @@ package object candidate {
   @derive(show)
   @newtype case class Email(email: EmailR)
 
+  @derive(show)
   @newtype case class HiringProcessId(id: UUID)
 
+  @derive(show)
   @newtype case class StepInstanceId(id: UUID)
 
   object StepInstanceId {
