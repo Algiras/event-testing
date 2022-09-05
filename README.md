@@ -1,100 +1,114 @@
-# Scala with Cats Code
+# Testing complex event sourced systems
 
-Sandbox project for the exercises in the book [Scala with Cats][book].
-Based on the [cats-seed.g8][cats-seed] template by [Underscore][underscore].
+Domain:
 
-Copyright Algimantas Krasauskas. Licensed [CC0 1.0][license].
+```scala
+sealed trait CandidateEvent
 
-[![Gitter](https://badges.gitter.im/Join%20Chat.svg)][gitter]
+case class CandidateCreatedEvent(email: Email) extends CandidateEvent
 
-## Getting Started
+case class AppliedToHiringProcessEvent(
+    hiringProcessId: HiringProcessId, 
+    positionId: PositionId
+    ) extends CandidateEvent
 
-You will need to have Git, Java 8, and [SBT][sbt] installed.
-You will also need an internet connection to run the exercises.
-All other dependencies are either included with the repo
-or downloaded on demand during compilation.
+case class AssignHiringManagerToProcessEvent(
+    hiringProcessId: HiringProcessId,
+    assignee: UserId
+) extends CandidateEvent
 
-Start SBT using the `sbt` command to enter SBT's *interactive mode*
-(`>` prompt):
-
-```bash
-$ sbt
-[info] Loading global plugins from <DIRECTORY>
-[info] Loading project definition from <DIRECTORY>
-[info] Set current project to <PROJECT_NAME>
-
->
 ```
 
-From the SBT prompt you can run the code in `Main.scala`:
+Naive approach
 
-```bash
-> run
-[info] Updating {file:<DIRECTORY>}cats-sandbox...
-[info] Resolving jline#jline;2.14.4 ...
-[info] Done updating.
-[info] Compiling 1 Scala source to <DIRECTORY>...
-[info] Running sandbox.Main
-Hello Cats!
-[success]
+
+```scala
+def random[T]: T = ???
+def process(state: Option[Candidate], event: CandidateEvent): Option[Candidate] = ???
+def process(event: CandidateEvent, events: CandidateEvent*): Option[Candidate] = {
+    (event :: events.toList).foldLeft(Option.empty[Candidate])(process)
+}
+
+val hiringProcessId = random[HiringProcessId]
+
+val candidateState = process(
+    CandidateCreatedEvent(random[Email]),
+    AppliedToHiringProcessEvent(hiringProcessId, random[PositionId]),
+    AssignHiringManagerToProcessEvent(hiringProcessId, random[UserId]),
+)
+
+// do some assertion on state
 ```
 
-You can also start a *Scala console* (`scala>` prompt)
-to play with small snippets of code:
 
-```bash
-> console
-[info] Starting scala interpreter...
-[info]
-Welcome to Scala 2.12.3 (Java HotSpot(TM) 64-Bit Server VM, Java 1.8.0_112).
-Type in expressions for evaluation. Or try :help.
+Context driven approach
 
-scala> import cats._, cats.implicits._, cats.data._
-import cats._
-import cats.implicits._
-import cats.data._
+```scala
+trait TestDSL[F[_]] {
+    def createCandidate(email: Email): F[(CandidateId, CandidateDSL[F])]
+}
 
-scala> "Hello " |+| "Cats!"
-res0: String = Hello Cats!
+trait CandidateDSL[F[_]] {
+    def startHiringProcess(hiringProcessId: HiringProcessId,positionId: PositionId): F[(HiringProcessId, HiringProcessDSL[F])]
+}
 
-scala>
+trait HiringProcessDSL[F[_]] {
+    def assignAssignee(userId: UserId): F[Unit]
+}
+
+trait QueryContext[F[_]] {
+    def getAssignees(candidateId: CandidateId, hpId: HiringProcessId): F[Set[UserId]]
+}
+
+def example[F[_] : Monad](ctx: TestDSL[F], queries: QueryContext[F]) = for {
+    (cId, cDsl) <- ctx.createCandidate(random[Email])
+    (hId, hpDsl) <- cDsl.startHiringProcess(random[HiringProcessId], random[PositionId])
+    userId = random[UserId]
+    _ <- hpDsl.assignAssignee(userId)
+    assignees <- queries.getAssignees(cId, hId)
+} yield assignees === Set(userId)
+
 ```
 
-Press `Ctrl+D` to quit the Scala console
-and return to SBT interactive mode.
+Extendable design
 
-Press `Ctrl+D` again to quit SBT interactive mode
-and return to your shell.
+```scala
+trait Generator[F[_]] {
+  def apply[T: Arbitrary]: F[T]
+}
+object Generator {
+    def apply[F[_]](implicit gen: Generator[F]): Generator[F] = gen
+}
+```
 
-### Notes on Editors and IDEs
 
-If you don't have a particular preference for a Scala editor or IDE,
-we strongly recommend you do the exercises for this course using
-the [Atom][atom] editor and a Linux or OS X terminal.
-See the instructions below to get started.
+Randomness
 
-If you want to use [Scala IDE][scala-ide] for Eclipse,
-we recommend using [sbteclipse][sbteclipse].
-Follow the instructions on the `sbteclipse` web page
-to install it as a global SBT plugin.
+```scala 
+trait TestDSL[F[_]] {
+    val random: Generator[F]
+    def createCandidate(email: F[Email] = random[Email]): F[(CandidateId, CandidateDSL[F])]
+}
 
-If you want to use IntelliJ IDEA,
-follow the instructions for [Importing an SBT Project][intellij-setup]
-in the IntelliJ online documentation.
+trait CandidateDSL[F[_]] {
+    val random: Generator[F]
+    def startHiringProcess(
+        hiringProcessId: F[HiringProcessId] = random[HiringProcessId],
+        positionId: F[PositionId] = random[PositionId]
+    ): F[(HiringProcessId, HiringProcessDSL[F])]
+}
 
-### Asking Questions
+trait HiringProcessDSL[F[_]] {
+    val random: Generator[F]
+    def assignAssignee(userId: F[UserId] = random[UserId]): F[Unit]
+}
 
-If you want to discuss the content or exercises with the authors,
-join us in our chat room on [Gitter][gitter].
+def example[F[_] : Sync](ctx: TestDSL[F], queries: QueryContext[F]) = for {
+    (cId, cDsl) <- ctx.createCandidate()
+    (hId, hpDsl) <- cDsl.startHiringProcess()
+    userId = Generator[F].random[UserId]
+    _ <- hpDsl.assignAssignee(userId)
+    assignees <- queries.getAssignees(cId, hId)
+} yield assignees === Set(userId)
 
-[cats-seed]: https://github.com/underscoreio/cats-seed.g8
-[underscore]: https://underscore.io
-[book]: https://underscore.io/books/advanced-scala
-[license]: https://creativecommons.org/publicdomain/zero/1.0/
-[sbt]: http://scala-sbt.org
-[gitter]: https://gitter.im/underscoreio/scala?utm_source=essential-scala-readme&utm_medium=badge&utm_campaign=essential-scala
-[atom]: https://atom.io
-[scala-ide]: http://scala-ide.org
-[sbteclipse]: https://github.com/typesafehub/sbteclipse
-[intellij-idea]: https://www.jetbrains.com/idea
-[intellij-setup]: https://www.jetbrains.com/help/idea/2016.1/getting-started-with-sbt.html#import_project
+```
